@@ -169,7 +169,7 @@ etc.). General steps:
 
 ---
 
-## API reference (Phase 1)
+## API reference
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -179,12 +179,20 @@ etc.). General steps:
 | POST | `/api/properties/search` | Filtered search (location/budget/BHK/type/area) |
 | POST | `/api/leads/qualify` | Score a lead from structured requirements |
 | POST | `/api/affordability` | EMI/loan calculation |
-| POST | `/api/chat` | Main conversational endpoint (agent + tools) |
+| POST | `/api/chat` | Main conversational endpoint (agent + tools + RAG) |
 | DELETE | `/api/chat/{session_id}` | Reset a conversation's memory |
+| POST | `/api/voice/transcribe` | Speech-to-text (multipart audio upload → text) |
+| POST | `/api/voice/speak` | Text-to-speech (text → sequence of base64 WAV clips) |
 
 `POST /api/chat` body: `{"session_id": "...", "message": "..."}` — the
 frontend generates a random `session_id` per browser tab and reuses it for
 the conversation.
+
+`POST /api/voice/transcribe` body: `multipart/form-data` with a `file`
+field (the recorded audio clip; `webm`/`wav`/`mp3`/etc. all work).
+
+`POST /api/voice/speak` body: `{"text": "..."}`. Returns
+`{"clips": ["<base64 wav>", ...]}` — play each clip in order.
 
 ---
 
@@ -232,11 +240,86 @@ should do one real end-to-end run with your own `GROQ_API_KEY` and
 - CORS is restricted via `ALLOWED_ORIGINS`; unhandled exceptions are
   caught globally and never leak stack traces to the client.
 
-## Phase 2 / Phase 3 (not built yet)
+## Phase 2 progress
 
-Per the build brief: voice (Whisper STT/TTS), RAG over a property knowledge
-base, a CRM (lead list, site-visit scheduling, conversation intelligence),
-and agent evaluation suites are Phase 2. Auth, rate limiting, structured
-logging, CI/CD, and other production hardening are Phase 3. Say "GO TO NEXT
-PHASE" / "GO TO PRODUCTION" to continue building on top of this without a
-rebuild.
+**Done:** Conversational intelligence. The agent now reads intent before
+deciding how to respond, rather than treating every message as a property
+query:
+
+- Real-estate questions (properties, budgets, locations, financing, site
+  visits) are still handled through the tools/database as in Phase 1.
+- General questions — coding, math, writing, anything else reasonable —
+  get a genuine answer instead of a deflection.
+- Topic changes are followed rather than forced back to real estate; when
+  the conversation returns to property talk, it picks up the budget/
+  location/timeline the person already gave, without re-asking.
+- Ambiguous requests get one concise clarifying question instead of a
+  guess.
+- The assistant doesn't repeatedly announce what it is — it just behaves
+  like a capable conversational partner, in and out of real-estate topics.
+
+This only required a system-prompt rewrite (`backend/app/llm.py`) — no new
+tools or endpoints — since the underlying tool-calling loop already
+supports the model choosing not to call a tool.
+
+Also removed all demo/instructional framing from the product surface
+(the "this is demo data" banner, explanatory onboarding copy, the "AI
+Sales Assistant" eyebrow label) so it reads as a real product rather than
+a showcase. The one exception is the developer-facing message that
+appears only if `GROQ_API_KEY` is missing — that's an operator error
+state, not user-facing demo copy.
+
+**Done:** RAG over property and domain knowledge. A new `search_knowledge_base`
+tool lets the agent answer open-ended questions — "what does RERA mean",
+"tell me about Whitefield", "something with a golf-course view" — that
+simple structured filters can't handle well.
+
+- Pipeline: chunking → TF-IDF embeddings → FAISS (`backend/app/rag/`),
+  with an automatic numpy-cosine-similarity fallback if FAISS isn't
+  available on a given host.
+- Indexes two kinds of content: curated domain knowledge (RERA, BHK, EMI,
+  possession-status terms, and a short overview of each of the 10
+  Bangalore localities in the seed data) and the live property data
+  itself (name, location, amenities, description) — so descriptive/vibe
+  queries can surface the right listing even when the person doesn't
+  name a filterable attribute.
+- Deliberately **not** a neural embedding model: TF-IDF needs no API key,
+  no model download at runtime, and no GPU — important for a lean,
+  low-cost host. It's swappable for a neural embedder later via the same
+  `RAGIndex` interface if retrieval quality needs to improve.
+- The index builds once at backend startup (`main.py`) against whatever
+  properties are in the database at the time, and is cached in memory.
+- Same anti-hallucination rule as Phase 1: the agent only states what a
+  retrieved chunk actually says; if nothing relevant comes back, it says
+  so rather than guessing.
+
+**Done:** Voice (push-to-talk STT, spoken replies via TTS). Both reuse the
+existing Groq client/API key — no extra provider:
+
+- `POST /api/voice/transcribe` — accepts a recorded audio clip, transcribes
+  it with Groq's hosted Whisper (`whisper-large-v3-turbo`).
+- `POST /api/voice/speak` — takes reply text, synthesizes it with Groq's
+  hosted Orpheus TTS (`canopylabs/orpheus-v1-english`). Orpheus caps input
+  at ~200 characters per call, so replies are split on sentence boundaries
+  into multiple WAV clips, returned together, and played back-to-back on
+  the frontend (`lib/audio.ts`).
+- Frontend: a hold-to-talk mic button next to the message box records via
+  `MediaRecorder`, sends the clip to `/api/voice/transcribe`, and sends
+  the transcribed text as a normal chat message. A "Spoken replies"
+  toggle, when on, speaks each assistant reply automatically.
+- Both endpoints fail with a clean `503` and a plain-language message
+  (not a crash) if the Groq API is unreachable or misconfigured, same
+  error-handling pattern as the chat endpoint.
+- This is push-to-talk by design, per the build brief — no WebRTC, no
+  continuous/always-listening mode.
+
+**Not built yet:** CRM (lead list, site-visit scheduling),
+conversation-intelligence auto-summaries, and an agent evaluation suite.
+Say which to build next, or say "GO TO PRODUCTION" for Phase 3 hardening
+once Phase 2 is complete.
+
+### Voice setup note
+
+No extra configuration needed beyond the `GROQ_API_KEY` you already have —
+both STT and TTS run on Groq. If your browser blocks microphone access,
+check the site permission in your browser's address-bar icon.
