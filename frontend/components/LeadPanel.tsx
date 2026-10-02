@@ -13,10 +13,7 @@ export default function LeadPanel({ lead }: { lead: LeadQualification | null }) 
         <p className="text-xs font-medium uppercase tracking-wide text-slate">
           Lead intelligence
         </p>
-        <p className="mt-2 text-sm text-slate">
-          Tell the assistant what you&apos;re looking for — budget, location,
-          and timeline — and a lead score will build up here as you chat.
-        </p>
+        <p className="mt-2 text-sm text-slate">No data yet.</p>
       </div>
     );
   }

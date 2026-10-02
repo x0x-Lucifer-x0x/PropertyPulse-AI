@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
-    groq_model: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    groq_model: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     database_url: str = os.getenv("DATABASE_URL", "")
     allowed_origins: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
     use_sqlite_fallback: bool = os.getenv("USE_SQLITE_FALLBACK", "false").lower() == "true"

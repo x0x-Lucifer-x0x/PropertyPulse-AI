@@ -4,8 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.database import Base, engine
-from app.routers import chat, properties, leads
+from app.database import Base, engine, SessionLocal
+from app.routers import chat, properties, leads, voice
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("property_pulse")
@@ -24,6 +24,17 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+
+    # Build the RAG index eagerly so the first chat request isn't slow,
+    # and so a build-time failure surfaces at startup, not mid-conversation.
+    from app.rag.index import get_index
+    db = SessionLocal()
+    try:
+        get_index(db)
+    except Exception:
+        logger.exception("RAG index build failed at startup; will retry lazily on first use")
+    finally:
+        db.close()
 
 
 @app.exception_handler(Exception)
@@ -44,3 +55,4 @@ def health():
 app.include_router(chat.router)
 app.include_router(properties.router)
 app.include_router(leads.router)
+app.include_router(voice.router)
